@@ -2,17 +2,15 @@
 
 Interactive tomography viewers for four olivine / plagioclase crystals (Fagradalsfjall 2023 and Svartsengi, December 2023 to May 2024), imaged at the SYRMEP beamline (Elettra).
 
-**You do not need the original scan data to view anything here.** Both viewers are single, self-contained HTML files that embed the images / volumes.
+## Open the viewers (click, nothing to download)
 
-## View online
+- **[Slice viewer](https://albcaracc.github.io/syrmep-crystal-tomography/tomo_4panel_viewer.html)**: four panels in eruption order, each with its own play button and scale bar
+- **[3D viewer](https://albcaracc.github.io/syrmep-crystal-tomography/tomo_3d_viewer.html)**: rotate / cut each crystal, pick one or view all four at the same scale
+- [Landing page](https://albcaracc.github.io/syrmep-crystal-tomography/)
 
-Once GitHub Pages is switched on for this repository (Settings, Pages, deploy from `main`, root), the viewers are at:
+> Clicking the `.html` files in the file list above shows their source code, because GitHub does not render HTML inside the repository. Use the links here instead (they run the viewers in your browser), or download a file and open it locally.
 
-- Landing page: `https://<user>.github.io/syrmep-crystal-tomography/`
-- Slice viewer: `.../tomo_4panel_viewer.html`
-- 3D viewer: `.../tomo_3d_viewer.html`
-
-Or download the HTML files and open them in Chrome, Edge or Firefox (no internet connection or install needed).
+**You do not need the original scan data to view anything here.** Both viewers are single, self-contained HTML files that embed the images / volumes. The first load takes a few seconds (16 MB and 30 MB).
 
 ## Contents
 
