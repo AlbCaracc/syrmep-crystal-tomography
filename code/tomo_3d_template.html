@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D micro-CT crystals</title>
+<style>
+  :root { --bg:#0e1013; --panel:#161a20; --line:#272d36; --ink:#e8ebef; --mute:#8b94a1; --accent:#f0a64a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:16px; display:grid; grid-template-columns:minmax(0,1fr) 270px; gap:14px; }
+  @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
+  h1 { font-size:17px; font-weight:600; margin:0 0 10px; }
+  .stage { position:relative; aspect-ratio:1/1; background:#0e1013; border:1px solid var(--line); border-radius:10px; overflow:hidden;
+           touch-action:none; cursor:grab; }
+  .stage:active { cursor:grabbing; }
+  canvas { width:100%; height:100%; display:block; }
+  #tiles { position:absolute; inset:0; pointer-events:none; }
+  #tiles .lab { position:absolute; padding:8px 10px; font-size:12.5px; line-height:1.3; text-shadow:0 0 3px #000,0 0 3px #000; }
+  #tiles .lab b { color:var(--accent); margin-right:4px; } #tiles .lab span { color:#aab2bd; display:block; }
+  #tiles .gridv { position:absolute; left:50%; top:0; bottom:0; border-left:1px solid var(--line); }
+  #tiles .gridh { position:absolute; top:50%; left:0; right:0; border-top:1px solid var(--line); }
+  .sb { position:absolute; left:16px; bottom:14px; color:#fff; font-size:12px; font-weight:600; text-align:center; pointer-events:none;
+        text-shadow:0 0 3px #000,0 0 3px #000; } .sb .bar { height:4px; background:#fff; margin-top:3px; box-shadow:0 0 3px #000; }
+  .hint { position:absolute; right:12px; bottom:12px; color:var(--mute); font-size:12px; pointer-events:none; }
+  .msg { position:absolute; inset:0; display:grid; place-items:center; color:var(--mute); padding:20px; text-align:center; background:#0e1013cc; }
+  aside { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; align-self:start; }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); margin:14px 0 6px; font-weight:600; }
+  aside h2:first-child { margin-top:0; }
+  .row { display:grid; grid-template-columns:96px 1fr; gap:4px 10px; align-items:center; margin:7px 0; }
+  .row label { display:flex; align-items:center; gap:7px; }
+  .sw { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  input[type=range] { width:100%; accent-color:var(--accent); min-width:0; }
+  select { width:100%; background:#232a34; color:var(--ink); border:1px solid #333c49; border-radius:7px; height:34px; padding:0 8px; font:inherit; }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; }
+  button { background:#232a34; color:var(--ink); border:1px solid #333c49; border-radius:7px; height:30px; padding:0 10px; font:inherit; cursor:pointer; }
+  button:hover { background:#2c3541; } button.on { background:var(--accent); color:#1a1205; border-color:var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .note { color:var(--mute); font-size:12px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <main>
+    <h1 id="title"></h1>
+    <div class="stage" id="stage">
+      <canvas id="gl"></canvas>
+      <div id="tiles"></div>
+      <div class="sb"><span id="sblab"></span><div class="bar" id="sbbar"></div></div>
+      <div class="hint">drag: rotate &middot; wheel / pinch: zoom</div>
+      <div class="msg" id="msg">Decoding volume&hellip;</div>
+    </div>
+  </main>
+  <aside>
+    <h2>Crystal</h2>
+    <select id="sel" aria-label="Crystal"></select>
+    <h2>Phases</h2>
+    <div class="row"><label><span class="sw" style="background:#f2434f"></span>Voids</label><input type="range" id="sV" min="0" max="100" value="85"></div>
+    <div class="row"><label><span class="sw" style="background:#f2a540"></span>Melt</label><input type="range" id="sM" min="0" max="100" value="60"></div>
+    <div class="row"><label><span class="sw" style="background:#8fd0a0"></span>Crystal</label><input type="range" id="sC" min="0" max="100" value="95"></div>
+    <h2>Cut plane</h2>
+    <div class="row"><label>Depth</label><input type="range" id="cut" min="0" max="100" value="0"></div>
+    <h2>View</h2>
+    <div class="btns"><button id="vSide">Side (z up)</button><button id="vTop">Top (slice view)</button><button id="vFront">Front</button>
+      <button id="spin">Auto&#8209;rotate</button></div>
+    <h2>Preset</h2>
+    <div class="btns"><button id="pSurf">Surface</button><button id="pCore">See&#8209;through</button><button id="pAll">Everything</button></div>
+    <p class="note" id="note"></p>
+  </aside>
+</div>
+
+<script>
+const CR = __DATA__;
+const $ = id => document.getElementById(id);
+
+const VS = `#version 300 es
+in vec2 p; void main(){ gl_Position = vec4(p,0.,1.); }`;
+const FS = `#version 300 es
+precision highp float; precision highp sampler3D;
+uniform sampler3D uVol; uniform vec3 uDim; uniform mat3 uRot; uniform vec2 uRes, uOff;
+uniform float uHalf, uR, uCut, uStep; uniform vec3 uSigma;
+out vec4 outc;
+vec3 V(vec3 p){ return texture(uVol,(p+0.5*uDim)/uDim).rgb; }
+float F(vec3 p, int c){ vec3 v=V(p); return c==0? v.r : (c==1? v.g : v.b); }
+float hash(vec2 c){ return fract(sin(dot(c,vec2(12.9898,78.233)))*43758.5453); }
+void main(){
+  vec2 uv = (gl_FragCoord.xy-uOff)/uRes*2.-1.;
+  vec3 ov = vec3(uv.x*uHalf, uv.y*uHalf, -uR);
+  vec3 o = uRot*ov, d = uRot*vec3(0.,0.,1.);
+  vec3 bmin=-0.5*uDim, bmax=0.5*uDim, inv=1./(d+vec3(1e-7));
+  vec3 t0=(bmin-o)*inv, t1=(bmax-o)*inv, tm=min(t0,t1), tM=max(t0,t1);
+  float tn=max(max(tm.x,tm.y),tm.z), tf=min(min(tM.x,tM.y),tM.z);
+  tn=max(tn,uR+uCut);
+  vec3 bg=vec3(0.055,0.063,0.075), acc=vec3(0.); float A=0.;
+  if(tf>tn){
+    float t=tn+hash(gl_FragCoord.xy)*uStep;
+    for(int i=0;i<2600;i++){
+      if(t>tf||A>0.985) break;
+      vec3 p=o+d*t; t+=uStep;
+      vec3 v=V(p); float s=v.r;
+      if(s<0.004) continue;
+      float wv=smoothstep(0.15,0.85,v.g);
+      float wm=(1.-wv)*smoothstep(0.15,0.85,v.b);
+      float wc=1.-wv-wm;
+      float sig=wv*uSigma.x+wm*uSigma.y+wc*uSigma.z;
+      if(sig<0.002) continue;
+      vec3 col=wv*vec3(0.95,0.26,0.31)+wm*vec3(0.96,0.65,0.25)+wc*vec3(0.56,0.82,0.64);
+      col*=0.65+0.7*s;
+      int c = wv>0.5 ? 1 : (wm>0.5 ? 2 : 0);
+      float e=1.;
+      vec3 g=vec3(F(p+vec3(e,0,0),c)-F(p-vec3(e,0,0),c),F(p+vec3(0,e,0),c)-F(p-vec3(0,e,0),c),F(p+vec3(0,0,e),c)-F(p-vec3(0,0,e),c))*0.5;
+      float gl=length(g); vec3 n=-g/(gl+1e-5);
+      float diff=max(dot(n,-d),0.);
+      float w=clamp(gl*7.,0.,1.);
+      float shade=mix(1.,0.30+0.70*diff+0.35*pow(diff,24.),w);
+      float a=1.-exp(-sig*uStep);
+      acc+=(1.-A)*a*col*shade; A+=(1.-A)*a;
+    }
+  }
+  outc=vec4(acc+(1.-A)*bg,1.);
+}`;
+
+const canvas = $('gl'), stage = $('stage');
+const gl = canvas.getContext('webgl2', {antialias:false, preserveDrawingBuffer:true});
+function fail(m){ $('msg').textContent = m; $('msg').style.display='grid'; }
+if(!gl) fail('This page needs WebGL2 (any recent Chrome, Edge, Firefox or Safari).');
+
+(async () => {
+  if(!gl) return;
+  const sh = (t,s)=>{ const o=gl.createShader(t); gl.shaderSource(o,s); gl.compileShader(o);
+    if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  const prog = gl.createProgram(); gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS)); gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog,'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  const U = n => gl.getUniformLocation(prog,n);
+  const u = {vol:U('uVol'),dim:U('uDim'),rot:U('uRot'),res:U('uRes'),off:U('uOff'),half:U('uHalf'),r:U('uR'),cut:U('uCut'),
+             step:U('uStep'),sig:U('uSigma')};
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+
+  // ---- volumes are decoded and uploaded only when first needed
+  CR.forEach(c => { c.dim=[c.nx,c.ny,c.nz]; c.R=0.5*Math.hypot(...c.dim)+2; c.maxUm=Math.max(...c.dim)*c.vox_um; c.tex=null; });
+  async function ensure(c){
+    if(c.tex) return;
+    $('msg').textContent = `Decoding ${c.crystal}…`; $('msg').style.display='grid';
+    await new Promise(r=>setTimeout(r,30));
+    const bin = atob(c.b64), u8 = new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
+    const raw = await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_3D,tex);
+    gl.texImage3D(gl.TEXTURE_3D,0,gl.RGB8,c.nx,c.ny,c.nz,0,gl.RGB,gl.UNSIGNED_BYTE,new Uint8Array(raw));
+    for(const [k,v] of [[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],
+        [gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_R,gl.CLAMP_TO_EDGE]])
+      gl.texParameteri(gl.TEXTURE_3D,k,v);
+    c.tex=tex; c.b64=null;
+  }
+
+  // ---- crystal selector
+  const sel=$('sel');
+  CR.forEach((c,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=`${c.crystal} – ${c.label}, ${c.mineral.toLowerCase()}`; sel.appendChild(o); });
+  const oAll=document.createElement('option'); oAll.value='all'; oAll.textContent='All four (same scale)'; sel.appendChild(oAll);
+  const DEFAULT = Math.max(0, CR.findIndex(c=>c.key==='Xtal_150'));
+  sel.value = String(DEFAULT);
+  let cur = DEFAULT;                // index or 'all'
+  const members = () => cur==='all' ? CR.map((_,i)=>i) : [cur];
+
+  // ---- camera. rot maps view -> volume (columns = view x,y,z axes in volume coords)
+  const mat = (c1,c2,c3)=>[...c1,...c2,...c3];
+  const VIEWS = { side:mat([1,0,0],[0,0,1],[0,-1,0]), top:mat([1,0,0],[0,-1,0],[0,0,-1]), front:mat([0,1,0],[0,0,1],[1,0,0]) };
+  let rot = VIEWS.side.slice(), zoom = 1, spin = false, quality = 1, needs = true;
+  const mul = (A,B)=>{ const C=new Array(9).fill(0);
+    for(let c=0;c<3;c++) for(let r=0;r<3;r++) for(let k=0;k<3;k++) C[c*3+r]+=A[k*3+r]*B[c*3+k]; return C; };
+  const rotY=a=>{const c=Math.cos(a),s=Math.sin(a); return [c,0,-s, 0,1,0, s,0,c];};
+  const rotX=a=>{const c=Math.cos(a),s=Math.sin(a); return [1,0,0, 0,c,s, 0,-s,c];};
+  const orth = M => { let a=M.slice(0,3), b=M.slice(3,6); const n=v=>{const l=Math.hypot(...v); return v.map(x=>x/l);};
+    a=n(a); const d=a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; b=n(b.map((x,i)=>x-d*a[i]));
+    return [...a,...b,a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; };
+  // half field of view in um: fits the biggest displayed crystal, identical for every tile -> same scale
+  const halfUm = ()=> 0.5*Math.max(...members().map(i=>CR[i].maxUm))*1.22/zoom;
+
+  const val = id => +$(id).value/100;
+  const sigma = v => v<=0.001 ? 0 : 0.02*Math.pow(60, v);
+  function size(){
+    const dpr = Math.min(window.devicePixelRatio||1,2), w = Math.round(stage.clientWidth*dpr*quality);
+    if(canvas.width!==w||canvas.height!==w){ canvas.width=w; canvas.height=w; }
+  }
+  function draw(){
+    size(); const W=canvas.width, idx=members(), all=idx.length>1, T=all?Math.floor(W/2):W;
+    gl.viewport(0,0,W,W); gl.clearColor(0.055,0.063,0.075,1); gl.clear(gl.COLOR_BUFFER_BIT);
+    idx.forEach((i,k)=>{
+      const c=CR[i]; if(!c.tex) return;
+      const x=all?(k%2)*T:0, y=all?(1-Math.floor(k/2))*T:0;
+      gl.viewport(x,y,T,T);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_3D,c.tex); gl.uniform1i(u.vol,0);
+      gl.uniform3fv(u.dim,c.dim); gl.uniformMatrix3fv(u.rot,false,rot);
+      gl.uniform2f(u.res,T,T); gl.uniform2f(u.off,x,y);
+      gl.uniform1f(u.half,halfUm()/c.vox_um); gl.uniform1f(u.r,c.R);
+      gl.uniform1f(u.cut,-c.R+val('cut')*2*c.R); gl.uniform1f(u.step,0.5*(quality<1?2:1));
+      gl.uniform3f(u.sig,sigma(val('sV')),sigma(val('sM')),sigma(val('sC')));
+      gl.drawArrays(gl.TRIANGLES,0,3);
+    });
+    const tilePx = (all?0.5:1)*stage.clientHeight, pxPerUm = tilePx/(2*halfUm());
+    const L = [20,50,100,200,500,1000,2000].find(l=>l*pxPerUm>=70) || 2000;
+    $('sbbar').style.width=(L*pxPerUm)+'px'; $('sblab').textContent = L>=1000 ? (L/1000)+' mm' : L+' µm';
+  }
+
+  function labels(){
+    const idx=members(), all=idx.length>1, t=$('tiles'); t.innerHTML='';
+    if(all){ t.insertAdjacentHTML('beforeend','<div class="gridv"></div><div class="gridh"></div>'); }
+    idx.forEach((i,k)=>{ const c=CR[i], d=document.createElement('div'); d.className='lab';
+      d.style.left=all?(k%2)*50+'%':'0'; d.style.top=all?Math.floor(k/2)*50+'%':'0';
+      d.innerHTML=`<b>${i+1}</b>${c.label}<span>${c.mineral} · ${c.crystal}</span>`; t.appendChild(d); });
+    $('title').textContent = all ? 'All four crystals, same scale' : `${CR[cur].label} – ${CR[cur].mineral} (${CR[cur].crystal})`;
+    const vox=[...new Set(idx.map(i=>CR[i].vox_um))].map(v=>v.toFixed(1)).join(' / ');
+    $('note').textContent = `Voxel size ${vox} µm. Phases are assigned from grey level (X-ray attenuation): voids are low-attenuation cavities inside the ` +
+      'crystal, melt is the intermediate glass-like grey level, crystal is everything denser; zoning inside the crystal appears as shading. ' +
+      'Epoxy and holder are removed. The cut plane is parallel to the screen.';
+  }
+  async function select(v){
+    cur = v==='all' ? 'all' : +v;
+    labels(); await Promise.all(members().map(i=>ensure(CR[i]))); $('msg').style.display='none'; needs=true;
+  }
+  sel.onchange = ()=>select(sel.value);
+
+  let refineT=null;
+  const request = (fast=false)=>{ if(fast){ quality=0.5; clearTimeout(refineT); refineT=setTimeout(()=>{quality=1;needs=true;},180);} needs=true; };
+  (function loop(){ if(spin){ rot=orth(mul(rot,rotY(-0.012))); needs=true; }
+    if(needs){ needs=false; draw(); } requestAnimationFrame(loop); })();
+  setInterval(()=>{ if(needs){ needs=false; draw(); } },100);   // fallback when rAF is throttled
+
+  // ---- interaction
+  const ptrs = new Map(); let pinch0=0;
+  stage.addEventListener('pointerdown',e=>{ stage.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,[e.clientX,e.clientY]);
+    if(ptrs.size===2){ const [a,b]=[...ptrs.values()]; pinch0=Math.hypot(a[0]-b[0],a[1]-b[1]); } });
+  stage.addEventListener('pointermove',e=>{ const p=ptrs.get(e.pointerId); if(!p) return;
+    if(ptrs.size===1){ const dx=e.clientX-p[0], dy=e.clientY-p[1];
+      rot = orth(mul(mul(rot,rotY(-dx*0.008)),rotX(-dy*0.008))); request(true); }
+    else if(ptrs.size===2){ ptrs.set(e.pointerId,[e.clientX,e.clientY]); const [a,b]=[...ptrs.values()];
+      const d=Math.hypot(a[0]-b[0],a[1]-b[1]); if(pinch0){ zoom=Math.min(8,Math.max(0.5,zoom*d/pinch0)); request(true);} pinch0=d; }
+    ptrs.set(e.pointerId,[e.clientX,e.clientY]); });
+  const up=e=>{ ptrs.delete(e.pointerId); pinch0=0; };
+  stage.addEventListener('pointerup',up); stage.addEventListener('pointercancel',up);
+  stage.addEventListener('wheel',e=>{ e.preventDefault(); zoom=Math.min(8,Math.max(0.5,zoom*Math.exp(-e.deltaY*0.0012))); request(true); },{passive:false});
+  for(const id of ['sV','sM','sC','cut']) $(id).addEventListener('input',()=>request(true));
+  window.addEventListener('resize',()=>{needs=true;});
+  const setView=v=>{ rot=VIEWS[v].slice(); needs=true; };
+  $('vSide').onclick=()=>setView('side'); $('vTop').onclick=()=>setView('top'); $('vFront').onclick=()=>setView('front');
+  $('spin').onclick=e=>{ spin=!spin; e.currentTarget.classList.toggle('on',spin); };
+  const preset=(v,m,c,cut=0)=>{ $('sV').value=v; $('sM').value=m; $('sC').value=c; $('cut').value=cut; needs=true; };
+  $('pSurf').onclick=()=>preset(85,60,95); $('pCore').onclick=()=>preset(90,85,12); $('pAll').onclick=()=>preset(80,70,45);
+  preset(85,60,95);
+  window.__tomo = { select, CR };         // handy for scripting / testing
+  await select(String(DEFAULT));
+})().catch(err=>{ fail('Could not start the 3D view: '+err.message); console.error(err); });
+</script>
+</body>
+</html>
