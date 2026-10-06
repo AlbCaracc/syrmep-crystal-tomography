@@ -51,10 +51,12 @@ MELT_MAX = {
 #   min_thick_um      minimum blob thickness (removes thin bright fringes along cracks)
 #   min_maxdepth_um   a blob has to reach this deep below the surface; min_vox: smallest blob kept
 BRIGHT_MELT = {
-    "Xtal_100": dict(fine_bin=3, rel_hi=3000, rel_lo=1600, min_depth_um=60.0, min_thick_um=16.0,
+    # rel_hi / rel_lo are in the crystal's own grey units: Crystal 102 has a lower overall contrast
+    # (host ~24.5k, melt ~27.5k) than the Crystal 100 scan used to tune them (host ~41k, melt ~45k)
+    "Xtal_102": dict(fine_bin=3, rel_hi=2000, rel_lo=1100, min_depth_um=60.0, min_thick_um=16.0,
                      min_maxdepth_um=70.0, min_vox=30),
 }
-DEFAULT_BINS = {"Xtal_100": 5, "Xtal_128": 4, "Xtal_150": 4, "Xtal_166": 4}   # voxel = bin * 0.9 um
+DEFAULT_BINS = {"Xtal_102": 5, "Xtal_128": 4, "Xtal_150": 4, "Xtal_166": 4}   # voxel = bin * 0.9 um
 MIN_MELT_VOXELS = 20
 
 

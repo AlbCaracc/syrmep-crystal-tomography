@@ -27,11 +27,11 @@ from PIL import Image
 # ----------------------------------------------------------------------------
 # Samples, in chronological order
 # ----------------------------------------------------------------------------
-PIXEL_UM = 0.9  # voxel size in um; PHASE_px_size in full_run_params_Xtal_{100,128,150,166}.txt
+PIXEL_UM = 0.9  # voxel size in um; PHASE_px_size in full_run_params_Xtal_{102,128,150,166}.txt
 ROOT = os.environ.get("TOMO_DATA_ROOT", r"D:\20235157_Caracciolo")  # folder with Eruption_2023, Svartsengi_23D, ...
 SAMPLES = [
-    dict(label="Fagradalsfjall 2023", mineral="Plagioclase", xtal="Xtal_100",
-         path=ROOT + r"\Eruption_2023\Xtal_100\output_16"),
+    dict(label="Fagradalsfjall 2023", mineral="Plagioclase", xtal="Xtal_102",
+         path=ROOT + r"\Eruption_2023\Xtal_102\output_16"),
     dict(label="Svartsengi December 2023", mineral="Olivine", xtal="Xtal_128",
          path=ROOT + r"\Svartsengi_23D\Xtal_128\output_16"),
     dict(label="Svartsengi February 2024", mineral="Olivine", xtal="Xtal_150",
