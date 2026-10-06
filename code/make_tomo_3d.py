@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Interactive 3D (GPU volume-rendering) viewer of the four micro-CT crystals, with a crystal drop-down
-and an "all four, same scale" mode.
+Interactive 3D (GPU volume-rendering) viewer of the four micro-CT crystals, with a crystal drop-down.
 
     python make_tomo_3d.py                         # all four crystals -> tomo_3d_viewer.html
     python make_tomo_3d.py --samples 3             # only crystal 150
@@ -13,7 +12,10 @@ Pipeline per crystal (the source drive is only read, never written):
      close + fill holes, crop to its bounding box
   3. label three phases from grey level (X-ray attenuation):
         voids   enclosed cavities darker than the solid threshold
-        melt    solid voxels darker than MELT_MAX[crystal] (glass-like grey level), away from the outer surface
+        melt    olivine crystals: solid voxels darker than MELT_MAX[crystal] (glass is less dense than olivine)
+                plagioclase (BRIGHT_MELT): blobs BRIGHTER than the local host level, found on a finer 2.7 um
+                grid (glass is slightly denser than plagioclase); the bright surface halo and thin crack
+                fringes are rejected by depth and thickness tests, see segment_bright_melt()
         crystal everything else
   4. pack grey level / void / melt into an RGB8 volume, gzip, embed in one self-contained HTML (WebGL2)
 
@@ -38,10 +40,19 @@ from make_tomo_4panel import OUT_DIR, PIXEL_UM, SAMPLES, crystal_name
 # grey-level histogram of each crystal: the valley between the glass-like low-attenuation population and the
 # main crystal peak. Adjust here if you segment differently.
 MELT_MAX = {
-    "Xtal_100": 38700,   # plagioclase: one dominant peak at ~40.5k; only a thin low tail -> very little melt
     "Xtal_128": 28500,   # low shoulder 26-28.5k, crystal peak 29.3-35k
     "Xtal_150": 40300,   # glass-like population 37.4-39.7k, valley ~40k, crystal 41-52k (zoning is NOT a phase)
     "Xtal_166": 48600,   # continuum; valley between 46.9k and 49.9k peaks -> lower class includes groundmass
+}
+# Plagioclase: melt is only slightly DENSER than the host, so a global grey threshold fails. Instead the
+# local host level (zoning, edge gradients) is estimated and removed, and bright blobs are kept:
+#   rel_hi / rel_lo   grey excess over the local host (16-bit units): seed / extent of a blob (hysteresis)
+#   min_depth_um      ignore everything closer than this to the outer surface (bright phase-retrieval halo)
+#   min_thick_um      minimum blob thickness (removes thin bright fringes along cracks)
+#   min_maxdepth_um   a blob has to reach this deep below the surface; min_vox: smallest blob kept
+BRIGHT_MELT = {
+    "Xtal_100": dict(fine_bin=3, rel_hi=3000, rel_lo=1600, min_depth_um=60.0, min_thick_um=16.0,
+                     min_maxdepth_um=70.0, min_vox=30),
 }
 DEFAULT_BINS = {"Xtal_100": 5, "Xtal_128": 4, "Xtal_150": 4, "Xtal_166": 4}   # voxel = bin * 0.9 um
 MIN_MELT_VOXELS = 20
@@ -62,6 +73,87 @@ def load_volume(files, B, cache):
         vol = np.stack(list(ex.map(load, range(0, len(files), B))))
     np.save(cache, vol)
     return vol
+
+
+def ensure_cache(files, B, cache):
+    """Like load_volume but does not keep the array in memory."""
+    if not os.path.exists(cache):
+        load_volume(files, B, cache)
+
+
+def segment_bright_melt(fine_path, vox_um, solid_thr, rel_hi=3000, rel_lo=1600, min_depth_um=60.0,
+                        min_thick_um=16.0, min_maxdepth_um=70.0, min_vox=30):
+    """Melt inclusions that are BRIGHTER than the host crystal, on a fine-grid volume.
+    Returns (melt bool, void bool, crop slices in fine-grid indices)."""
+    vol = np.load(fine_path, mmap_mode="r")
+    st = 3
+    small = ndi.gaussian_filter(np.asarray(vol[::st, ::st, ::st], dtype=np.float32), 0.5) > solid_thr
+    lab, n = ndi.label(small)
+    big = lab == 1 + int(np.argmax(ndi.sum(small, lab, range(1, n + 1))))
+    zs, ys, xs = ndi.find_objects(big.astype(np.uint8))[0]
+    m = 6
+    sl = tuple(slice(max(0, q.start * st - m), min(sz, q.stop * st + m)) for q, sz in zip((zs, ys, xs), vol.shape))
+    g = ndi.gaussian_filter(np.asarray(vol[sl], dtype=np.float32), 1.0)
+    shape = g.shape
+    del small, lab, big
+
+    solid = g > solid_thr
+    lab, n = ndi.label(solid)
+    body = lab == 1 + int(np.argmax(ndi.sum(solid, lab, range(1, n + 1))))
+    del solid, lab
+    body = ndi.binary_fill_holes(ndi.binary_closing(body, iterations=2))
+
+    def up2(a):   # nearest-neighbour upsampling of a 2x coarser array back to the fine grid
+        return np.repeat(np.repeat(np.repeat(a, 2, 0), 2, 1), 2, 2)[:shape[0], :shape[1], :shape[2]]
+
+    # depth below the outer surface (fine voxels), computed on a 2x coarser grid to save memory
+    depth = up2(ndi.distance_transform_edt(body[::2, ::2, ::2]).astype(np.float32)) * 2
+    inner = body & (depth > 8)
+
+    # local host grey level: bright blobs clipped away, then smoothed inside the crystal only
+    cap = np.percentile(g[inner][::50], 90)
+    gc = np.minimum(g[::2, ::2, ::2], cap)
+    w = inner[::2, ::2, ::2].astype(np.float32)
+    Lc = (ndi.gaussian_filter(gc * w, 5) / np.maximum(ndi.gaussian_filter(w, 5), 1e-3)).astype(np.float32)
+    L = ndi.zoom(Lc, 2, order=1)
+    L = np.pad(L, [(0, max(0, a - b)) for a, b in zip(shape, L.shape)], mode="edge")[:shape[0], :shape[1], :shape[2]]
+    res = g - L
+    del gc, w, Lc, L
+
+    min_depth = min_depth_um / vox_um
+    cand_hi = (res > rel_hi) & (depth > min_depth)
+    cand_lo = (res > rel_lo) & (depth > min_depth)
+    del res
+    # opening by a ball (diameter = min_thick_um): removes thin sheets (halo fringes along cracks), keeps blob shapes
+    r = 0.5 * min_thick_um / (2 * vox_um)                      # radius in units of the 2x coarser grid
+    c2 = cand_lo[::2, ::2, ::2]
+    core = ndi.distance_transform_edt(c2) >= r
+    cand_lo &= up2(c2 & (ndi.distance_transform_edt(~core) <= r))
+    del c2, core
+    lab, n = ndi.label(cand_lo)
+    seed = np.zeros(n + 1, bool)
+    seed[np.unique(lab[cand_hi])] = True
+    seed[0] = False
+    melt = seed[lab]                                           # hysteresis: weak voxels connected to strong ones
+    lab, n = ndi.label(melt)
+    idx = np.arange(1, n + 1)
+    keep = ndi.sum(melt, lab, idx) >= min_vox
+    keep &= np.asarray(ndi.maximum(depth, lab, idx)) * vox_um >= min_maxdepth_um
+    melt = np.isin(lab, 1 + np.flatnonzero(keep))
+    void = ndi.binary_erosion(body, iterations=2) & (g < solid_thr)
+    return melt, void, sl
+
+
+def to_display_grid(fine, fine_sl, B_fine, disp_sl, B_disp, shape):
+    """Resample a fine-grid mask (cropped to fine_sl) onto the display grid (cropped to disp_sl) as a 0-1 fraction.
+    Voxel k of a grid with bin B lies at slice B*k+0.5 along z and at pixel B*k+(B-1)/2 along y and x."""
+    a = ndi.gaussian_filter(fine.astype(np.float32), 1.0)       # pre-filter before decimating
+    ratio = B_disp / B_fine
+    off = [ratio * disp_sl[0].start - fine_sl[0].start]
+    for ax in (1, 2):
+        off.append((B_disp * disp_sl[ax].start + (B_disp - 1) / 2 - (B_fine - 1) / 2) / B_fine - fine_sl[ax].start)
+    return np.clip(ndi.affine_transform(a, np.full(3, ratio), offset=off, output_shape=shape, order=1,
+                                        mode="constant", cval=0.0), 0, 1)
 
 
 def otsu(x, bins=256):
@@ -108,18 +200,31 @@ def build_crystal(s, B, cache_dir, levels=200):
 
     # --- phases
     depth = ndi.distance_transform_edt(body)                   # voxels from the outer surface
-    void = ndi.binary_erosion(body, iterations=2) & (g < solid_thr)
-    near_void = ndi.binary_dilation(void, iterations=2)        # partial-volume shell around cavities is not melt
-    melt = (g >= solid_thr) & (g < MELT_MAX[s["xtal"]]) & (depth > 2) & ~near_void
-    lab, n = ndi.label(melt)
-    if n:
-        sizes = ndi.sum(melt, lab, range(1, n + 1))
-        melt = np.isin(lab, 1 + np.flatnonzero(sizes >= MIN_MELT_VOXELS))
-    inner = (g >= solid_thr) & body & ~melt & (depth > 2)
+    cfg = BRIGHT_MELT.get(s["xtal"])
+    if cfg:   # plagioclase: bright melt found on a finer grid, resampled to the display grid (0-1 fractions)
+        cfg = dict(cfg)
+        Bf = cfg.pop("fine_bin")
+        fine_path = os.path.join(cache_dir, f"{s['xtal']}_bin{Bf}.npy")
+        ensure_cache(files, Bf, fine_path)
+        melt_f, void_f, fine_sl = segment_bright_melt(fine_path, PIXEL_UM * Bf, solid_thr, **cfg)
+        melt = to_display_grid(melt_f, fine_sl, Bf, sl, B, g.shape)
+        void = to_display_grid(void_f, fine_sl, Bf, sl, B, g.shape)
+        del melt_f, void_f
+        rule = f"bright blobs on a {PIXEL_UM * Bf:.1f} um grid"
+    else:
+        void = ndi.binary_erosion(body, iterations=2) & (g < solid_thr)
+        near_void = ndi.binary_dilation(void, iterations=2)    # partial-volume shell around cavities is not melt
+        melt = (g >= solid_thr) & (g < MELT_MAX[s["xtal"]]) & (depth > 2) & ~near_void
+        lab, n = ndi.label(melt)
+        if n:
+            sizes = ndi.sum(melt, lab, range(1, n + 1))
+            melt = np.isin(lab, 1 + np.flatnonzero(sizes >= MIN_MELT_VOXELS))
+        rule = f"melt < {MELT_MAX[s['xtal']]}"
+    inner = (g >= solid_thr) & body & ~(melt > 0.5) & (depth > 2)
     vv = vox_um ** 3 / 1e9                                     # mm3 per voxel
     tot = body.sum() * vv
     print(f"{s['xtal']}: {B}x binned ({vox_um:.1f} um), cropped {g.shape[::-1]}, solid thr {solid_thr:.0f}, "
-          f"melt < {MELT_MAX[s['xtal']]}, body {tot:.3f} mm3 | crystal {inner.sum() * vv:.3f}, "
+          f"{rule}, body {tot:.3f} mm3 | crystal {inner.sum() * vv:.3f}, "
           f"melt {melt.sum() * vv:.4f}, voids {void.sum() * vv:.4f} mm3", flush=True)
 
     # --- RGB8: R = grey level (soft sub-voxel edge), G = void, B = melt
@@ -129,8 +234,9 @@ def build_crystal(s, B, cache_dir, levels=200):
     soft = np.clip((g - air) / (solid_thr - air), 0, 1)
     soft = soft * soft * (3 - 2 * soft)
     r8 = np.where(mask, np.maximum(np.round(q8 * np.where(g > solid_thr, 1.0, soft)), 1), 0).astype(np.uint8)
-    g8 = np.round(ndi.gaussian_filter(void.astype(np.float32), 0.7) * 255).astype(np.uint8)
-    b8 = np.round(ndi.gaussian_filter(melt.astype(np.float32), 0.7) * 255).astype(np.uint8)
+    sg = 0.0 if cfg else 0.7                                    # bright-melt fractions are already smooth
+    g8 = np.round(ndi.gaussian_filter(void.astype(np.float32), sg) * 255).astype(np.uint8)
+    b8 = np.round(ndi.gaussian_filter(melt.astype(np.float32), sg) * 255).astype(np.uint8)
     nz, ny, nx = r8.shape
     raw = np.stack([r8, g8, b8], axis=-1).tobytes()
     blob = gzip.compress(raw, 9)

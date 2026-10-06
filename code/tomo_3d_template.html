@@ -179,7 +179,7 @@ if(!gl) fail('This page needs WebGL2 (any recent Chrome, Edge, Firefox or Safari
   const halfUm = ()=> 0.5*Math.max(...members().map(i=>CR[i].maxUm))*1.22/zoom;
 
   const val = id => +$(id).value/100;
-  const sigma = v => v<=0.001 ? 0 : 0.02*Math.pow(60, v);
+  const sigma = v => v<=0.001 ? 0 : 0.003*Math.pow(400, v);   // 0.003-1.2 per voxel: low end lets thick crystals go see-through
   function size(){
     const dpr = Math.min(window.devicePixelRatio||1,2), w = Math.round(stage.clientWidth*dpr*quality);
     if(canvas.width!==w||canvas.height!==w){ canvas.width=w; canvas.height=w; }
@@ -212,9 +212,9 @@ if(!gl) fail('This page needs WebGL2 (any recent Chrome, Edge, Firefox or Safari
       d.innerHTML=`<b>${i+1}</b>${c.label}<span>${c.mineral} · ${c.crystal}</span>`; t.appendChild(d); });
     $('title').textContent = all ? 'All four crystals, same scale' : `${CR[cur].label} – ${CR[cur].mineral} (${CR[cur].crystal})`;
     const vox=[...new Set(idx.map(i=>CR[i].vox_um))].map(v=>v.toFixed(1)).join(' / ');
-    $('note').textContent = `Voxel size ${vox} µm. Phases are assigned from grey level (X-ray attenuation): voids are low-attenuation cavities inside the ` +
-      'crystal, melt is the intermediate glass-like grey level, crystal is everything denser; zoning inside the crystal appears as shading. ' +
-      'Epoxy and holder are removed. The cut plane is parallel to the screen.';
+    $('note').textContent = `Voxel size ${vox} µm. Phases are set from grey level (X-ray attenuation), not chemistry. ` +
+      'Voids are enclosed cavities. Melt is darker than the crystal in olivine and brighter than it in plagioclase. ' +
+      'The cut plane is parallel to the screen.';
   }
   async function select(v){
     cur = v==='all' ? 'all' : +v;
