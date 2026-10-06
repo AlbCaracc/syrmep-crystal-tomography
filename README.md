@@ -5,8 +5,7 @@ Interactive tomography viewers for four olivine / plagioclase crystals (Fagradal
 ## Open the viewers (click, nothing to download)
 
 - **[Slice viewer](https://albcaracc.github.io/syrmep-crystal-tomography/tomo_4panel_viewer.html)**: four panels in eruption order, each with its own play button and scale bar
-- **[3D viewer](https://albcaracc.github.io/syrmep-crystal-tomography/tomo_3d_viewer.html)**: rotate / cut each crystal, pick one or view all four at the same scale
-- [Landing page](https://albcaracc.github.io/syrmep-crystal-tomography/)
+- **[3D viewer](https://albcaracc.github.io/syrmep-crystal-tomography/tomo_3d_viewer.html)**: rotate and cut through each crystal; pick the crystal from a drop-down
 
 > Clicking the `.html` files in the file list above shows their source code, because GitHub does not render HTML inside the repository. Use the links here instead (they run the viewers in your browser), or download a file and open it locally.
 
@@ -16,10 +15,8 @@ Interactive tomography viewers for four olivine / plagioclase crystals (Fagradal
 
 | File | What it is |
 |---|---|
-| `index.html` | Landing page |
 | `tomo_4panel_viewer.html` | Four panels in eruption order; each scrolls through its stack with its own play button, slider, slice / z read-out and 500 µm scale bar. Grey levels are auto-contrasted per crystal over the whole stack (0.5-99.8 percentile). |
-| `tomo_3d_viewer.html` | WebGL2 volume rendering. Drop-down for Crystal 100 / 128 / 150 / 166 or all four at the same scale; phase opacity sliders (voids, melt, crystal), screen-parallel cut plane, orthographic view with a live scale bar. |
-| `figures/tomo_4panel_static.png`, `.pdf` | Mid-stack slice of each crystal, same contrast and scale bars. |
+| `tomo_3d_viewer.html` | WebGL2 volume rendering. Drop-down for Crystal 100 / 128 / 150 / 166; phase opacity sliders (voids, melt, crystal), screen-parallel cut plane, orthographic view with a live scale bar. |
 | `code/` | Python that produced the files above (see below). |
 
 | Panel | Crystal | Sample | Mineral |
@@ -53,8 +50,8 @@ Needs the original reconstructed TIFF stacks (not in this repository, about 35 G
 cd code
 # set TOMO_DATA_ROOT to the folder containing Eruption_2023, Svartsengi_23D, ...
 # set TOMO_OUT_DIR to where the HTML / figures should be written (default: current folder)
-python make_tomo_4panel.py      # slice viewer + static figure
-python make_tomo_3d.py          # 3D viewer (all four crystals)
+python make_tomo_4panel.py      # slice viewer (also writes a static 2x2 figure, not published here)
+python make_tomo_3d.py          # 3D viewer (drop-down with the four crystals)
 ```
 
 Options: `make_tomo_4panel.py --step 2 --out-size 1024 --quality 80` for a bigger, smoother slice viewer; `make_tomo_3d.py --bins 6,5,5,5` for a smaller 3D file.
@@ -62,4 +59,4 @@ Options: `make_tomo_4panel.py --step 2 --out-size 1024 --quality 80` for a bigge
 ## Notes
 
 - No licence has been chosen yet; until one is added, all rights are reserved by the owner. Add a `LICENSE` file to state the terms of reuse.
-- The 3D viewer holds about 1 GB of GPU memory in the "All four" view.
+- The 3D viewer needs WebGL2 and a reasonably capable GPU; Crystal 100 and Crystal 166 are the heaviest.

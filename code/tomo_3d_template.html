@@ -159,7 +159,6 @@ if(!gl) fail('This page needs WebGL2 (any recent Chrome, Edge, Firefox or Safari
   // ---- crystal selector
   const sel=$('sel');
   CR.forEach((c,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=`${c.crystal} – ${c.label}, ${c.mineral.toLowerCase()}`; sel.appendChild(o); });
-  const oAll=document.createElement('option'); oAll.value='all'; oAll.textContent='All four (same scale)'; sel.appendChild(oAll);
   const DEFAULT = Math.max(0, CR.findIndex(c=>c.key==='Xtal_150'));
   sel.value = String(DEFAULT);
   let cur = DEFAULT;                // index or 'all'
